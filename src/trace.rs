@@ -4,7 +4,7 @@ use crate::cpu::CPU;
 use crate::opcodes;
 use std::collections::HashMap;
 
-pub fn trace(cpu: &CPU) -> String {
+pub fn trace(cpu: &mut CPU) -> String {
     let ref opscodes: HashMap<u8, &'static opcodes::OpCode> = *opcodes::OPCODES_MAP;
 
     let code = cpu.mem_read(cpu.program_counter);
@@ -15,9 +15,9 @@ pub fn trace(cpu: &CPU) -> String {
     hex_dump.push(code);
 
     let (mem_addr, stored_value) = match ops.mode {
-        AddressingMode::Immediate | AddressingMode::NoneAddressing => (0, 0),
+        AddressingMode::Immediate | AddressingMode::Implied => (0, 0),
         _ => {
-            let addr = cpu.get_absolute_address_readonly(&ops.mode, begin + 1);
+            let (addr, _) = cpu.get_absolute_address(&ops.mode, begin + 1);
             (addr, cpu.mem_read(addr))
         }
     };
@@ -35,29 +35,29 @@ pub fn trace(cpu: &CPU) -> String {
             match ops.mode {
                 AddressingMode::Immediate => format!("#${:02x}", address),
                 AddressingMode::ZeroPage => format!("${:02x} = {:02x}", mem_addr, stored_value),
-                AddressingMode::ZeroPage_X => format!(
+                AddressingMode::ZeroPageX => format!(
                     "${:02x},X @ {:02x} = {:02x}",
                     address, mem_addr, stored_value
                 ),
-                AddressingMode::ZeroPage_Y => format!(
+                AddressingMode::ZeroPageY => format!(
                     "${:02x},Y @ {:02x} = {:02x}",
                     address, mem_addr, stored_value
                 ),
-                AddressingMode::Indirect_X => format!(
+                AddressingMode::IndirectX => format!(
                     "(${:02x},X) @ {:02x} = {:04x} = {:02x}",
                     address,
                     (address.wrapping_add(cpu.register_x)),
                     mem_addr,
                     stored_value
                 ),
-                AddressingMode::Indirect_Y => format!(
+                AddressingMode::IndirectY => format!(
                     "(${:02x}),Y = {:04x} @ {:04x} = {:02x}",
                     address,
                     (mem_addr.wrapping_sub(cpu.register_y as u16)),
                     mem_addr,
                     stored_value
                 ),
-                AddressingMode::NoneAddressing => {
+                AddressingMode::Relative => {
                     // assuming local jumps: BNE, BVS, etc....
                     let address: usize =
                         (begin as usize + 2).wrapping_add((address as i8) as usize);
@@ -79,29 +79,27 @@ pub fn trace(cpu: &CPU) -> String {
             let address = cpu.mem_read_u16(begin + 1);
 
             match ops.mode {
-                AddressingMode::NoneAddressing => {
-                    if ops.code == 0x6c {
-                        //jmp indirect
-                        let jmp_addr = if address & 0x00FF == 0x00FF {
-                            let lo = cpu.mem_read(address);
-                            let hi = cpu.mem_read(address & 0xFF00);
-                            (hi as u16) << 8 | (lo as u16)
-                        } else {
-                            cpu.mem_read_u16(address)
-                        };
-
-                        // let jmp_addr = cpu.mem_read_u16(address);
-                        format!("(${:04x}) = {:04x}", address, jmp_addr)
+                AddressingMode::Implied => {
+                    format!("${:04x}", address)
+                }
+                AddressingMode::Indirect => {
+                    //jmp indirect
+                    let jmp_addr = if address & 0x00FF == 0x00FF {
+                        let lo = cpu.mem_read(address);
+                        let hi = cpu.mem_read(address & 0xFF00);
+                        (hi as u16) << 8 | (lo as u16)
                     } else {
-                        format!("${:04x}", address)
-                    }
+                        cpu.mem_read_u16(address)
+                    };
+
+                    format!("(${:04x}) = {:04x}", address, jmp_addr)
                 }
                 AddressingMode::Absolute => format!("${:04x} = {:02x}", mem_addr, stored_value),
-                AddressingMode::Absolute_X => format!(
+                AddressingMode::AbsoluteX => format!(
                     "${:04x},X @ {:04x} = {:02x}",
                     address, mem_addr, stored_value
                 ),
-                AddressingMode::Absolute_Y => format!(
+                AddressingMode::AbsoluteY => format!(
                     "${:04x},Y @ {:04x} = {:02x}",
                     address, mem_addr, stored_value
                 ),
@@ -138,7 +136,7 @@ mod test {
 
     #[test]
     fn test_format_trace() {
-        let mut bus = Bus::new(test_rom(vec![]));
+        let mut bus = Bus::new(test_rom(), 44100.0, |_ppu, _joypad| {});
         bus.mem_write(100, 0xa2);
         bus.mem_write(101, 0x01);
         bus.mem_write(102, 0xca);
@@ -170,7 +168,7 @@ mod test {
 
     #[test]
     fn test_format_mem_access() {
-        let mut bus = Bus::new(test_rom(vec![]));
+        let mut bus = Bus::new(test_rom(), 44100.0, |_ppu, _joypad| {});
         // ORA ($33), Y
         bus.mem_write(100, 0x11);
         bus.mem_write(101, 0x33);
